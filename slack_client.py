@@ -68,11 +68,11 @@ bot_commands = {
     'previous': 'Shows the comic published prior to the one last shown.',
     'next': 'Shows the next comic published after the one last shown.',
     'random': 'Shows a random comic.',
-    'show': ("Shows the comic indexed by the number"
-             "immediately following 'show'."),
-    'history': ("Prints the index number of"
-                "the last X comics shown, where X is typed"
-                "immediately after 'history'."),
+    'show': ('Shows the comic indexed by the number'
+             'immediately following \'show\'.'),
+    'history': ('Prints an unorderd list of all'
+                'comics shown since app restart.'
+                '  A little randomness is good, right?'),
     'api': 'Helpfully shows xkcd\'s api helpful documentation. Sort of.',
     'which': 'Which what?'
 }
@@ -140,6 +140,7 @@ class SlackClient:
         self.bot_start = dt.now()
         self.msg_lock = Lock()
         self.at_bot = f'<@{self.bot_id}>'
+        self.comic_history = {}
         logger.info("Created new SlackClient Instance")
 
     def __repr__(self):
@@ -191,23 +192,30 @@ class SlackClient:
             response = f'See you next time!'
 
         elif cmd == 'first':
+            # add comic to self.comic_history
             # FIXME
 
             pass
         elif cmd == 'last':
+            # add comic to self.comic_history
             # TODO
             pass
         elif cmd == 'previous':
+            # add comic to self.comic_history
             # TODO
             pass
         elif cmd == 'next':
+            # add comic to self.comic_history
             # TODO
             pass
         elif cmd == 'random':
+
             # TODO
+            # add comic to self.comic_history
             pass
         elif cmd == 'show':
             # TODO
+            # add comic to self.comic_history
             pass
         elif cmd == 'history':
             # TODO
@@ -237,6 +245,45 @@ class SlackClient:
                     channel=chan,
                     text=message
                 )
+
+    def comic_handler(self, comic):
+        """ Extract a comic image and return it for publication in Slack"""
+        # Extract the comic #
+        # Add it to the dictionary if not there already
+        # Extract the image
+        # Return the image for publication
+        return
+
+    def validate_comic_num(self, comic_num):
+        """ Makes sure that the argument passed in is a valid comic #. """
+        # ping xkcd for last comic #
+        # last_num = retrieve_last_comic_number()
+        # make sure comic_num is int between 1 - last comic num.
+
+        # this function may be irrelevent - if we get a 404 from
+        # xkcd, then it doesn't exist.
+
+        pass
+
+    def retrieve_last_comic_number(self):
+        """ Returns the number of the most recent comic on xkcd"""
+        # get last comic
+        # last_comic = retrieve_last_comic()
+        # parse out comic # from url
+        # return comic #
+        pass
+
+    def retrieve_last_comic(self):
+        """ Retrieves the actual most recent comic """
+        pass
+
+    def retrieve_comic(self, comic_num):
+        """ Returns a comic based off its comic number"""
+        pass
+
+    def retrieve_random_comic(self):
+        """ Uses xkcd's api to return a random comic """
+        pass
 
     def get_uptime(self):
         """ Return how long the client has been connected """
