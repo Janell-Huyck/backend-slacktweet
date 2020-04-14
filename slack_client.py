@@ -10,45 +10,11 @@ import logging
 from datetime import datetime as dt
 import signal
 from threading import Lock
-
-#  Please see also https://github.com/sidhantpanda/xkcd-api/blob/master/xkcd-api.js
-# for help on referencing a particular comic
-
-""" Thoughts on how this bot should work:
-it should automatically post the most recent comic to the workspace,
-any time a new comic comes out.  this would be defined as any new
-comic that has not yet been posted or referred to in the log.
-
-the user @mentions the bot,and a modal pops up
-the modal shows the current xkcd comic, and
-buttons like the xkcd website itself - forward, back, random, etc
-there are also buttons to share to group and to share to an individual.
-the bot will need to "sign" this comic with the user's name, so some OAuth
-is needed i think... will have to look into this.
-
-there should be a help section explaining how to use the bot -
-accessible from commands and from a button on the modal.
-
-the user should also be able to post with slash commands.
-
-NICE TO HAVE:
-scan the messages in the workspace for the mention of xkcd and pop up a
-query to the poster ("would you like to post a comic?")
-
-Thoughts on how to work this:
-I'll need to keep track of what the most recent comic was.  I think we
-could use logging with a message like "posted most recent comic # 1234."
-in this situation, and have the bot read the log file on loading,
-parse it for #1234, ping the xkcd, and print any comics that have a higher
-number.
-
-"""
-
-"""A standalone Slack client implementation
-see https: // slack.dev/python-slackclient/
-"""
+from xkcd import XkcdApi
+import requests
 
 
+# Guard against Python 2
 if sys.version_info[0] < 3:
     raise RuntimeError("This program requires Python 3")
 
@@ -58,6 +24,7 @@ load_dotenv()
 goodbye_posted_flag = False
 BOT_NAME = "while_xkcd"
 BOT_CHAN = "#janell-bot-test"
+WEBHOOK_URL = os.environ['WEBHOOK_URL']
 bot_commands = {
     'help': 'Shows this helpful command reference.',
     'ping': 'Shows the uptime of this bot.',
@@ -68,13 +35,10 @@ bot_commands = {
     'previous': 'Shows the comic published prior to the one last shown.',
     'next': 'Shows the next comic published after the one last shown.',
     'random': 'Shows a random comic.',
-    'show': ('Shows the comic indexed by the number'
-             'immediately following \'show\'.'),
-    'history': ('Prints an unorderd list of all'
-                'comics shown since app restart.'
-                '  A little randomness is good, right?'),
-    'api': 'Helpfully shows xkcd\'s api helpful documentation. Sort of.',
-    'which': 'Which what?'
+    '[int]': 'Shows the comic indexed by the integer.',
+    'history': ('Prints an orderd list of all'
+                'comics shown since app restart.'),
+    'api': 'Helpfully shows xkcd\'s api helpful documentation. Sort of.'
 }
 
 
@@ -94,18 +58,6 @@ def formatted_dict(d, with_header=False):
     return "```<empty>```"
 
 
-#  Uncomment below code to test that the app can post anything at all.
-# slack_token = os.environ["BOT_USER_TOKEN"]
-# client = WebClient(token=slack_token)
-
-# client.chat_postMessage(
-#     channel="#janell-bot-test",
-#     text="Hello from your app! :tada:",
-# )
-
-# Create module logger from config file
-
-
 def config_logger():
     """ Setup logging configuration """
     with open('logging.yaml') as f:
@@ -118,6 +70,8 @@ logger = config_logger()
 
 
 class SlackClient:
+    """ A stand-alone Slack client that can post xkcd images to Slack"""
+
     def __init__(self, bot_user_token, bot_id=None):
         self.name = BOT_NAME
         self.bot_id = bot_id
@@ -140,8 +94,18 @@ class SlackClient:
         self.bot_start = dt.now()
         self.msg_lock = Lock()
         self.at_bot = f'<@{self.bot_id}>'
-        self.comic_history = {}
+        self.comic_history = []
         logger.info("Created new SlackClient Instance")
+        self.xkcd = XkcdApi()
+
+    def __enter__(self):
+        """ Allows this class to be used as a context manager."""
+        logger.info("New Slack Client initiated.")
+        return self
+
+    def __exit__(self, type, value, traceback):
+        """Implements context manager"""
+        logger.info("Exiting the Slack Client.")
 
     def __repr__(self):
         return self.at_bot
@@ -164,24 +128,29 @@ class SlackClient:
             raw_command = data['text'].split(self.at_bot)[1].strip().lower()
             # handle the command
             response = self.handle_command(raw_command, chan)
-            self.post_message(response, chan)
-
-        logger.debug(data['text'])
+            if response:
+                if response.startswith('http'):
+                    self.post_image(response, chan)
+                else:
+                    self.post_message(response, chan)
+                logger.debug(data['text'])
 
     def handle_command(self, raw_command, chan):
         """Parses a raw command string directed at the bot"""
         response = None
         args = raw_command.split(" ")
         cmd = args[0]
+        # To recognize a specific comic request, attempt to change cmd into an integer
+        try:
+            cmd = int(cmd)
+        except Exception:
+            pass
+
         logger.info(f'{self} Received command "{raw_command}"')
 
         if cmd == 'raise':
             response = "Manual exception handler test"
             raise Exception("Manual exception handler test.")
-        elif cmd not in bot_commands:
-            response = (f"'{cmd}' doesn\'t mean anything to me."
-                        "  Try 'help' for a list of commands.")
-            logger.error(f'{self} Unknown command: {cmd}')
 
         elif cmd == 'help':
             response = "Available commands: \n" + formatted_dict(bot_commands)
@@ -191,99 +160,81 @@ class SlackClient:
             logger.warning('Manual exit requested.')
             response = f'See you next time!'
 
-        elif cmd == 'first':
-            # add comic to self.comic_history
-            # FIXME
+        elif isinstance(cmd, int) or cmd in [
+                'first', 'last', 'next', 'previous', 'random', 'api']:
+            # These commands are for showing a comic
+            # First, determine what request will be sent to xkcd instance
+            request = cmd
+            if cmd == 'next':
+                if self.comic_history:
+                    request = int(self.comic_history[-1]) + 1
+                else:
+                    request = 'random'
+            elif cmd == "previous":
+                if self.comic_history:
+                    request = int(self.comic_history[-1]) - 1
+                else:
+                    request = 'random'
+            elif cmd == 'api':
+                request = 1481
+            # Next, send a request to the xkcd instance
+            comic_object = self.xkcd.handle_comic_request(request)
+            # Then, add the number of the comic to the history
+            self.comic_history.append(comic_object['num'])
+            # Finally, post the comic
+            self.post_image(comic_object)
 
-            pass
-        elif cmd == 'last':
-            # add comic to self.comic_history
-            # TODO
-            pass
-        elif cmd == 'previous':
-            # add comic to self.comic_history
-            # TODO
-            pass
-        elif cmd == 'next':
-            # add comic to self.comic_history
-            # TODO
-            pass
-        elif cmd == 'random':
-
-            # TODO
-            # add comic to self.comic_history
-            pass
-        elif cmd == 'show':
-            # TODO
-            # add comic to self.comic_history
-            pass
         elif cmd == 'history':
-            # TODO
-            pass
-        elif cmd == 'api':
-            # TODO
-            pass
-        elif cmd == 'which':
-            response = f'I have no idea, sorry.  Which what?'
+            response = f'These are the comics shown since app restart:\
+                \n {self.comic_history}'
 
+        elif cmd not in bot_commands:
+            response = (f"'{cmd}' doesn\'t mean anything to me."
+                        "  Try 'help' for a list of commands.")
+            logger.error(f'{self} Unknown command: {cmd}')
         return response
 
     def on_goodbye(self, **payload):
+        """Slack has decided to terminate our instance"""
         self.post_message('Goodbye, cruel world...')
         logger.warning('f{self} is disconnecting.')
 
     def post_message(self, message, chan=BOT_CHAN):
         """Sends a message to a Slack channel"""
         # make sure that we have an actual WebClient instance
-        print('entry to post_message:', message)
-
         assert self.sc._web_client is not None
         with self.msg_lock:
-            print('inside msg lock, message :', message)
             if message:
                 self.sc._web_client.chat_postMessage(
                     channel=chan,
-                    text=message
+                    text=message,
+                    as_user=False,
+
                 )
 
-    def comic_handler(self, comic):
-        """ Extract a comic image and return it for publication in Slack"""
-        # Extract the comic #
-        # Add it to the dictionary if not there already
-        # Extract the image
-        # Return the image for publication
-        return
+    def post_image(self, comic_object, chan=BOT_CHAN):
+        """Given a comic json object, post that comic."""
+        with self.msg_lock:
+            headers = {
+                'Content-type': 'application/json',
+            }
 
-    def validate_comic_num(self, comic_num):
-        """ Makes sure that the argument passed in is a valid comic #. """
-        # ping xkcd for last comic #
-        # last_num = retrieve_last_comic_number()
-        # make sure comic_num is int between 1 - last comic num.
+            data = {
+                "blocks": [{
+                    "type": "image",
+                            "title": {
+                                "type": "plain_text",
+                                "text": comic_object['title']
+                            },
+                    "image_url": comic_object['img'],
+                    "alt_text": comic_object['alt']
+                }
+                ]}
 
-        # this function may be irrelevent - if we get a 404 from
-        # xkcd, then it doesn't exist.
-
-        pass
-
-    def retrieve_last_comic_number(self):
-        """ Returns the number of the most recent comic on xkcd"""
-        # get last comic
-        # last_comic = retrieve_last_comic()
-        # parse out comic # from url
-        # return comic #
-        pass
-
-    def retrieve_last_comic(self):
-        """ Retrieves the actual most recent comic """
-        pass
-
-    def retrieve_comic(self, comic_num):
-        """ Returns a comic based off its comic number"""
-        pass
-
-    def retrieve_random_comic(self):
-        """ Uses xkcd's api to return a random comic """
-        pass
+            requests.post(
+                WEBHOOK_URL, headers=headers, data=f'{data}')
+            logger.info("completed webhook post")
+            return
 
     def get_uptime(self):
         """ Return how long the client has been connected """
@@ -308,11 +259,11 @@ class SlackClient:
 
 
 def main(args):
-    slackclient = SlackClient(
+    SlackClient(
         os.environ['BOT_USER_TOKEN'],
         os.environ['BOT_USER_ID']).run()
 
 
 if __name__ == '__main__':
     main(sys.argv[1:])
-    print("completed - done with everything")
+    logger.info("completed - done with everything")
