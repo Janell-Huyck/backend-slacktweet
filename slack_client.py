@@ -12,7 +12,7 @@ import signal
 from threading import Lock
 from xkcd import XkcdApi
 import requests
-
+import json
 
 # Guard against Python 2
 if sys.version_info[0] < 3:
@@ -116,125 +116,146 @@ class SlackClient:
     def on_hello(self, **payload):
         """ When Slack has confirmed our connection request"""
         logger.info(f'{self} has connected to the Slack RTM server.')
-        self.post_message(f'{self.name} is now online.')
+        self.post_message(self.text_to_blocks(f'{self.name} is now online.'))
 
     def on_message(self, **payload):
         """ Slack has sent a message to me"""
         data = payload['data']
         self.check_goodbye(data)
         if 'text' in data and self.at_bot in data['text']:
-            # parse everything after the at_bot mention
             chan = data['channel']
             raw_command = data['text'].split(self.at_bot)[1].strip().lower()
-            # handle the command
             response = self.handle_command(raw_command, chan)
-            if response:
-                if response.startswith('http'):
-                    self.post_image(response, chan)
-                else:
-                    self.post_message(response, chan)
-                logger.debug(data['text'])
+            self.post_message(response, chan)
 
     def handle_command(self, raw_command, chan):
         """Parses a raw command string directed at the bot"""
         response = None
         args = raw_command.split(" ")
         cmd = args[0]
-        # To recognize a specific comic request, attempt to change cmd into an integer
+        cmd = self.try_to_change_cmd_to_int(cmd)
+        logger.info(f'{self} Received command "{raw_command}"')
+
+        if cmd == 'raise':
+            response = self.handle_raise()
+        elif cmd == 'help':
+            response = self.handle_help()
+        elif cmd == 'ping':
+            response = self.handle_ping()
+        elif cmd == 'exit' or cmd == 'quit':
+            response = self.handle_quit()
+        elif isinstance(cmd, int) or cmd in ['first', 'last', 'random']:
+            response = self.handle_comic_request(cmd)
+        elif cmd == 'next':
+            response = self.handle_next()
+        elif cmd == 'previous':
+            response = self.handle_previous()
+        elif cmd == 'api':
+            response = self.handle_api()
+        elif cmd == 'history':
+            response = self.handle_history()
+        else:
+            response = self.handle_not_command(cmd)
+        return response
+
+    def try_to_change_cmd_to_int(self, cmd):
         try:
             cmd = int(cmd)
         except Exception:
             pass
+        finally:
+            return cmd
 
-        logger.info(f'{self} Received command "{raw_command}"')
+    def handle_raise(self):
+        response = self.text_to_blocks("Manual exception handler test")
+        raise Exception("Manual exception handler test.")
+        return response
 
-        if cmd == 'raise':
-            response = "Manual exception handler test"
-            raise Exception("Manual exception handler test.")
+    def handle_help(self):
+        response = self.text_to_blocks(
+            "Available commands: \n" + formatted_dict(bot_commands))
+        return response
 
-        elif cmd == 'help':
-            response = "Available commands: \n" + formatted_dict(bot_commands)
-        elif cmd == 'ping':
-            response = f'{self.name} has been running for {self.get_uptime()}.'
-        elif cmd == 'exit' or cmd == 'quit':
-            logger.warning('Manual exit requested.')
-            response = f'See you next time!'
+    def handle_ping(self):
+        response = self.text_to_blocks(
+            f'{self.name} has been running for {self.get_uptime()}.')
+        return response
 
-        elif isinstance(cmd, int) or cmd in [
-                'first', 'last', 'next', 'previous', 'random', 'api']:
-            # These commands are for showing a comic
-            # First, determine what request will be sent to xkcd instance
-            request = cmd
-            if cmd == 'next':
-                if self.comic_history:
-                    request = int(self.comic_history[-1]) + 1
-                else:
-                    request = 'random'
-            elif cmd == "previous":
-                if self.comic_history:
-                    request = int(self.comic_history[-1]) - 1
-                else:
-                    request = 'random'
-            elif cmd == 'api':
-                request = 1481
-            # Next, send a request to the xkcd instance
-            comic_object = self.xkcd.handle_comic_request(request)
-            # Then, add the number of the comic to the history
-            self.comic_history.append(comic_object['num'])
-            # Finally, post the comic
-            self.post_image(comic_object)
+    def handle_quit(self):
+        logger.warning('Manual exit requested.')
+        response = self.text_to_blocks(f'See you next time!')
+        return response
 
-        elif cmd == 'history':
-            response = f'These are the comics shown since app restart:\
-                \n {self.comic_history}'
+    def handle_comic_request(self, request):
+        comic_number, blocks = self.xkcd.handle_comic_request(request)
+        self.comic_history.append(comic_number)
+        response = blocks
+        return response
 
-        elif cmd not in bot_commands:
-            response = (f"'{cmd}' doesn\'t mean anything to me."
-                        "  Try 'help' for a list of commands.")
-            logger.error(f'{self} Unknown command: {cmd}')
+    def handle_next(self):
+        if self.comic_history:
+            response = self.handle_comic_request(
+                int(self.comic_history[-1]) + 1)
+        else:
+            response = self.text_to_blocks(
+                'I\'m sorry.  There must be a first to be a next.\n'
+                'Please try this after you have requested a comic.')
+        return response
+
+    def handle_previous(self):
+        if self.comic_history:
+            response = self.handle_comic_request(
+                int(self.comic_history[-1]) - 1)
+        else:
+            response = self.text_to_blocks(
+                'I\'m sorry.  There must be a first to be a previous.\n'
+                'Please try this after you have requested a comic.')
+        return response
+
+    def handle_api(self):
+        # 1481 is xkcd's comic about API's
+        response = self.handle_comic_request(1481)
+        return response
+
+    def handle_history(self):
+        response = self.text_to_blocks(f'These are the comics shown since app restart:\
+            \n {self.comic_history}')
+        return response
+
+    def handle_not_command(self, cmd):
+        response = self.text_to_blocks(
+            f"'{cmd}' doesn\'t mean anything to me.\n"
+            "  Try 'help' for a list of commands.")
+        logger.error(f'{self} Unknown command: {cmd}')
         return response
 
     def on_goodbye(self, **payload):
         """Slack has decided to terminate our instance"""
-        self.post_message('Goodbye, cruel world...')
+        self.post_message(self.text_to_blocks('Goodbye, cruel world...'))
         logger.warning('f{self} is disconnecting.')
 
-    def post_message(self, message, chan=BOT_CHAN):
+    def text_to_blocks(self, message):
+        blocks = [{
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": message
+            }
+        }]
+        return blocks
+
+    def post_message(self, blocks=None, chan=BOT_CHAN):
         """Sends a message to a Slack channel"""
         # make sure that we have an actual WebClient instance
         assert self.sc._web_client is not None
-        with self.msg_lock:
-            if message:
-                self.sc._web_client.chat_postMessage(
-                    channel=chan,
-                    text=message,
-                    as_user=False,
-
-                )
-
-    def post_image(self, comic_object, chan=BOT_CHAN):
-        """Given a comic json object, post that comic."""
-        with self.msg_lock:
-            headers = {
-                'Content-type': 'application/json',
-            }
-
-            data = {
-                "blocks": [{
-                    "type": "image",
-                            "title": {
-                                "type": "plain_text",
-                                "text": comic_object['title']
-                            },
-                    "image_url": comic_object['img'],
-                    "alt_text": comic_object['alt']
-                }
-                ]}
-
-            requests.post(
-                WEBHOOK_URL, headers=headers, data=f'{data}')
-            logger.info("completed webhook post")
-            return
+        if blocks:
+            blocks = json.dumps(blocks)
+        self.sc._web_client.chat_postMessage(
+            channel=chan,
+            # text=message,
+            as_user=False,
+            blocks=blocks
+        )
 
     def get_uptime(self):
         """ Return how long the client has been connected """

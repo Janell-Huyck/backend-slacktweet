@@ -58,31 +58,35 @@ class XkcdApi:
 
     def handle_comic_request(self, request):
         """ Returns a comic json object, given a descriptive request"""
-        # Comic '404' can't be found - it's a joke.
-        if request == 404:
-            request = 1969
+        nonworking_links = [404, 1663]
+        comic_not_found = 1969  # returns a comic about a 404 error
+
+        if request in nonworking_links:
+            request = comic_not_found
+
         if isinstance(request, int) or request in ['first', 'last', 'random']:
             comic_json_url = self.construct_url(request)
             if comic_json_url == "invalid":
-                comic_json_url = self.construct_url(1969)
+                comic_json_url = self.construct_url(comic_not_found)
             comic_object = requests.get(
                 comic_json_url).json()
-        # Called when for some reason xkcd can't return the json request.
-        # Seems to happen a lot for the most recent comics.
         else:
-            return self.handle_comic_request(1969)
+            return self.handle_comic_request(comic_not_found)
+        blocks = self.construct_blocks(comic_object)
+        comic_number = comic_object['num']
+        return comic_number, blocks
 
-        return comic_object
+    def construct_blocks(self, comic_object):
+        """ Returns the JSON format block object used for printing in Slack"""
 
-    def get_comic(self, url):
-        """ Returns a comic object, given the url """
-        return requests.get(url).json()
-
-
-def main(*args):
-
-    xkcd = XkcdApi()
-
-
-if __name__ == '__main__':
-    main(sys.argv[1:])
+        blocks = [{
+            "type": "image",
+            "title": {
+                "type": "plain_text",
+                "text": comic_object['title']
+            },
+            "image_url": comic_object['img'],
+            "alt_text": comic_object['alt']
+        }
+        ]
+        return blocks
