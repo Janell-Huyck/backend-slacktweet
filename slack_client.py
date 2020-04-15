@@ -11,7 +11,6 @@ from datetime import datetime as dt
 import signal
 from threading import Lock
 from xkcd import XkcdApi
-import requests
 import json
 
 # Guard against Python 2
