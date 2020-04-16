@@ -7,6 +7,7 @@ import yaml
 from dotenv import load_dotenv
 import requests
 from random import randint
+import json
 
 # Guard against python2
 if sys.version_info[0] < 3:
@@ -33,7 +34,6 @@ class XkcdApi:
     def __init__(self):
         self.base_url = 'https://www.xkcd.com/'
         self.json_ending = '/info.0.json'
-        self.comic_api_help = '1481'
         self.get_random_api = 'random'
         self.first = '1'
         self.last = str(requests.get(
@@ -41,7 +41,6 @@ class XkcdApi:
 
     def construct_url(self, request):
         """ Changes a descriptive request into a gettable url"""
-
         if (isinstance(request, int) and
                 request > 0 and request < int(self.last)):
             url = self.base_url + str(request) + self.json_ending
@@ -57,7 +56,8 @@ class XkcdApi:
         return url
 
     def handle_comic_request(self, request):
-        """ Returns a comic json object, given a descriptive request"""
+        """ Returns a printable comic block and a comic number,
+        given a descriptive request"""
         nonworking_links = [404, 1663]
         comic_not_found = 1969  # returns a comic about a 404 error
 
@@ -89,4 +89,5 @@ class XkcdApi:
             "alt_text": comic_object['alt']
         }
         ]
+        blocks = json.dumps(blocks)
         return blocks

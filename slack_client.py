@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+# TODO : write README
+
 import yaml
 import sys
 import os
@@ -41,20 +43,12 @@ bot_commands = {
 }
 
 
-def formatted_dict(d, with_header=False):
+def formatted_dict(d):
     """Renders the contents of a dictionary into a preformatted string"""
-    if d:
-        # find the longest key entry in d or the header string
-        width = max(map(len, d))
-        lines = []
-        if with_header:
-            header_key = 'Date'
-            header_value = 'Comic(s)'
-            width = max(width, len(header_key))
-            lines.extend([f'{header_key:<{width}} : {header_value}'])
-        lines.extend([f'{k:<{width}} : {v}' for k, v in d.items()])
-        return "```\n" + '\n'.join(lines) + "\n```"
-    return "```<empty>```"
+    lines = []
+    width = max(map(len, d))  # find the longest key in the dictionary
+    lines.extend([f'{k:<{width}} : {v}' for k, v in d.items()])
+    return "```\n" + '\n'.join(lines) + "\n```"
 
 
 def config_logger():
@@ -120,21 +114,25 @@ class SlackClient:
     def on_message(self, **payload):
         """ Slack has sent a message to me"""
         data = payload['data']
+        # Used to verify that we're not trying to shut down
         self.check_goodbye(data)
         if 'text' in data and self.at_bot in data['text']:
             chan = data['channel']
-            raw_command = data['text'].split(self.at_bot)[1].strip().lower()
-            response = self.handle_command(raw_command, chan)
+            cmd = self.parse_command(data['text'])
+            response = self.handle_command(cmd)
             self.post_message(response, chan)
 
-    def handle_command(self, raw_command, chan):
-        """Parses a raw command string directed at the bot"""
-        response = None
-        args = raw_command.split(" ")
-        cmd = args[0]
+    def parse_command(self, typed_text):
+        """ Parses the text typed by the user into a
+        single word command to execute."""
+        raw_command = typed_text.split(self.at_bot)[1]
+        cmd = raw_command.strip().lower().split()[0]
         cmd = self.try_to_change_cmd_to_int(cmd)
-        logger.info(f'{self} Received command "{raw_command}"')
+        logger.info(f'{self} Received command "{cmd}"')
+        return cmd
 
+    def handle_command(self, cmd):
+        """Routes the command received to the appropriate handler."""
         if cmd == 'raise':
             response = self.handle_raise()
         elif cmd == 'help':
@@ -158,6 +156,8 @@ class SlackClient:
         return response
 
     def try_to_change_cmd_to_int(self, cmd):
+        """ If a number string is passed in, we want
+        to change that to an integer."""
         try:
             cmd = int(cmd)
         except Exception:
@@ -166,32 +166,41 @@ class SlackClient:
             return cmd
 
     def handle_raise(self):
+        """ Tests the response to a manually raised exception."""
         response = self.text_to_blocks("Manual exception handler test")
         raise Exception("Manual exception handler test.")
         return response
 
     def handle_help(self):
+        """ Returns a printable block of available commands"""
         response = self.text_to_blocks(
             "Available commands: \n" + formatted_dict(bot_commands))
         return response
 
     def handle_ping(self):
+        """ Returns a printable block of how long program has been running."""
         response = self.text_to_blocks(
             f'{self.name} has been running for {self.get_uptime()}.')
         return response
 
     def handle_quit(self):
+        """ Returns a printable block of a goodbye message."""
         logger.warning('Manual exit requested.')
         response = self.text_to_blocks(f'See you next time!')
         return response
 
     def handle_comic_request(self, request):
+        """ Adds comic number to history and returns
+        a printable block of the comic."""
         comic_number, blocks = self.xkcd.handle_comic_request(request)
         self.comic_history.append(comic_number)
         response = blocks
         return response
 
     def handle_next(self):
+        """ Returns a printable block of the comic
+        published after the last one in the app's history.
+        Handles exception of there being an empty history."""
         if self.comic_history:
             response = self.handle_comic_request(
                 int(self.comic_history[-1]) + 1)
@@ -202,6 +211,9 @@ class SlackClient:
         return response
 
     def handle_previous(self):
+        """ Returns a printable block of the comic
+        published prior to the last one in the app's history.
+        Handles exception of there being an empty history."""
         if self.comic_history:
             response = self.handle_comic_request(
                 int(self.comic_history[-1]) - 1)
@@ -212,16 +224,22 @@ class SlackClient:
         return response
 
     def handle_api(self):
+        """ This is a joke feature.  It returns a printable
+        comic about the API for xkcd."""
         # 1481 is xkcd's comic about API's
         response = self.handle_comic_request(1481)
         return response
 
     def handle_history(self):
+        """ Returns a printable block of the list of
+        comic numbers shown since app restart."""
         response = self.text_to_blocks(f'These are the comics shown since app restart:\
             \n {self.comic_history}')
         return response
 
     def handle_not_command(self, cmd):
+        """ Returns a printable block of error message for when the user types in
+        an @ bot command that's not in the list of commands."""
         response = self.text_to_blocks(
             f"'{cmd}' doesn\'t mean anything to me.\n"
             "  Try 'help' for a list of commands.")
@@ -234,6 +252,7 @@ class SlackClient:
         logger.warning('f{self} is disconnecting.')
 
     def text_to_blocks(self, message):
+        """ Returns a printable blocks format of a text message."""
         blocks = [{
             "type": "section",
             "text": {
@@ -241,17 +260,15 @@ class SlackClient:
                 "text": message
             }
         }]
+        blocks = json.dumps(blocks)
         return blocks
 
     def post_message(self, blocks=None, chan=BOT_CHAN):
         """Sends a message to a Slack channel"""
         # make sure that we have an actual WebClient instance
         assert self.sc._web_client is not None
-        if blocks:
-            blocks = json.dumps(blocks)
         self.sc._web_client.chat_postMessage(
             channel=chan,
-            # text=message,
             as_user=False,
             blocks=blocks
         )
